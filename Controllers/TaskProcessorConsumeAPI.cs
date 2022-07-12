@@ -3,6 +3,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -13,7 +14,7 @@ using TaskProcessorAPI.Models;
 
 public class TaskProcessorConsumeAPI : BackgroundService, IDisposable
     {
-    private IServiceProvider _sp;
+    private readonly IServiceProvider _sp;
     private readonly TaskModelContext _context;
     private readonly ILogger _logger;
     private IConnection _connection;
@@ -79,7 +80,7 @@ public class TaskProcessorConsumeAPI : BackgroundService, IDisposable
     private void HandleMessage(string content)
     {
         
-        Save_to_Model(content);
+         Save_to_Model(content);
         // we just print this message   
         _logger.LogInformation($"consumer received {content}");
     }
@@ -105,7 +106,44 @@ public class TaskProcessorConsumeAPI : BackgroundService, IDisposable
         Console.WriteLine("TaskID" + taskid.ToString());
         _context.AddRange(taskmodel);
         _context.SaveChanges();
-        string jsonData = JsonConvert.SerializeObject(taskmodel);
+        taskmodel.TaskStatus = "COMPLETED";
 
+        //Console.WriteLine("TaskID" + taskid.ToString());
+        _context.Entry(taskmodel).State = EntityState.Modified;
+        _context.SaveChangesAsync();
+        string jsonData = JsonConvert.SerializeObject(taskmodel);
+        publishmessages(jsonData);
+
+    }
+
+    public void publishmessages(string json)
+    {
+        var factory = new ConnectionFactory()
+        {
+            //HostName = "localhost",
+            //Port = 31672
+            HostName = Environment.GetEnvironmentVariable("RABBITMQ_HOST"),
+            Port = Convert.ToInt32(Environment.GetEnvironmentVariable("RABBITMQ_PORT"))
+
+        };
+
+        Console.WriteLine(factory.HostName + ":" + factory.Port);
+        using (var connection = factory.CreateConnection())
+        using (var channel = connection.CreateModel())
+        {
+            channel.QueueDeclare(queue: "task-processed",
+                                 durable: false,
+                                 exclusive: false,
+                                 autoDelete: false,
+                                 arguments: null);
+
+
+            var body = Encoding.UTF8.GetBytes(json);
+
+            channel.BasicPublish(exchange: "",
+                                 routingKey: "task-processed",
+                                 basicProperties: null,
+                                 body: body);
+        }
     }
 }
